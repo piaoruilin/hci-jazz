@@ -1,0 +1,15 @@
+step_index,heard_letter,pressed_match,reaction_time_ms,alarm_played,alarm_file,latency_from_alarm_ms,is_target,correct
+0,B,False,,none,none,,False,True
+1,C,False,,none,none,,False,True
+2,B,True,683.0,none,none,,True,True
+3,D,False,,none,none,,False,True
+4,B,False,,consonant,c_major.wav,,True,False
+5,D,True,2015.0,none,none,,True,True
+6,F,False,,none,none,,False,True
+7,D,True,649.0,none,none,,True,True
+8,F,False,,dissonant,c_maj7_b9.wav,,True,False
+9,G,False,,none,none,,False,True
+10,B,True,952.0,none,none,,False,False
+11,G,True,974.0,none,none,,True,True
+12,C,False,,none,none,,False,True
+13,C,False,,none,none,,False,True
