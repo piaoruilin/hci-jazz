@@ -1,0 +1,15 @@
+# UI and Audio
+pygame==2.5.2
+tk==0.1.0
+
+# Data Processing
+pandas==2.2.0
+numpy==1.26.0
+
+# Statistical Analysis
+scipy==1.12.0
+statsmodels==0.14.1
+
+# Visualization for Thesis
+matplotlib==3.8.2
+seaborn==0.13.2

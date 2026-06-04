@@ -1,0 +1,26 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environment
+venv/
+env/
+.env
+
+# MacOS system files
+.DS_Store
+
+# Data and Results
+# Un-comment the line below if you don't want to upload raw data to GitHub
+# data/raw/
+*.log
+
+# VS Code settings
+.vscode/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Sound Library
+assets/sounds/FluidR3_GM.sf2
