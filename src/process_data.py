@@ -1,140 +1,208 @@
-import os
+import argparse
 import glob
+import os
+import re
+from typing import Dict, List, Optional, Tuple
+
 import numpy as np
 import pandas as pd
 from scipy import stats
 
-def process_and_analyze():
-    # -------------------------------------------------------------
-    # STEP 1: LOAD AND AGGREGATE RAW BEHAVIORAL PYGAME TELEMETRY
-    # -------------------------------------------------------------
-    behavioral_files = glob.glob("data/raw_behavioral/*.csv")
-    
-    if not behavioral_files:
-        print("❌ No behavioral CSV files found in data/raw_behavioral/.")
-        return
+
+def extract_base_participant_id(filename: str) -> str:
+    """Normalize names like U01.csv and U01-1.csv to U01."""
+    base_name = os.path.basename(str(filename)).replace('.csv', '')
+    clean_id = re.split(r'[-_]', base_name)[0]
+    return clean_id.strip().upper()
+
+
+def ensure_directory(path: str) -> None:
+    os.makedirs(path, exist_ok=True)
+
+
+def load_raw_behavioral_files(raw_dir: str) -> List[str]:
+    pattern = os.path.join(raw_dir, '*.csv')
+    return sorted(glob.glob(pattern))
+
+
+def clean_behavioral_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df.columns = df.columns.str.strip()
+
+    if 'reaction_time_ms' in df.columns:
+        df = df[df['reaction_time_ms'].notna()]
+        df = df[df['reaction_time_ms'] >= 200]
+
+    return df
+
+
+def calculate_participant_metrics(participant_id: str, df: pd.DataFrame) -> Dict[str, float]:
+    valid = clean_behavioral_dataframe(df)
+    baseline = valid.loc[valid['alarm_file'] == 'none', 'reaction_time_ms']
+    chord = valid.loc[valid['alarm_file'] != 'none', 'reaction_time_ms']
+
+    metrics = {
+        'Participant_ID': participant_id,
+        'Runs_Combined': df['run_id'].nunique() if 'run_id' in df.columns else np.nan,
+        'Total_Rows': len(df),
+        'Keepable_Rows': len(valid),
+        'Baseline_Mean_RT_ms': baseline.mean() if not baseline.empty else np.nan,
+        'Chord_Mean_RT_ms': chord.mean() if not chord.empty else np.nan,
+        'Accuracy_Rate': df['correct'].mean() if 'correct' in df.columns else np.nan,
+    }
+    metrics['RT_Penalty_ms'] = metrics['Chord_Mean_RT_ms'] - metrics['Baseline_Mean_RT_ms']
+    return metrics
+
+
+def combine_raw_sessions(raw_dir: str, participant_raw_out: str, save_combined_raw: bool) -> pd.DataFrame:
+    raw_files = load_raw_behavioral_files(raw_dir)
+    if not raw_files:
+        raise FileNotFoundError(f'No raw CSV files found in {raw_dir}')
+
+    grouped_dfs: Dict[str, List[pd.DataFrame]] = {}
+
+    for path in raw_files:
+        base_id = extract_base_participant_id(path)
+        df = pd.read_csv(path)
+        grouped_dfs.setdefault(base_id, []).append(df)
 
     summary_records = []
-    
-    print(f"Parsing {len(behavioral_files)} participant log files...")
-    for file_path in behavioral_files:
-        df = pd.read_csv(file_path)
-        
-        # Extract ID metadata safely
-        p_id = df['Participant_ID'].iloc[0] if 'Participant_ID' in df.columns else os.path.basename(file_path).replace(".csv", "")
-        
-        # --- DATA CLEANING & PREPROCESSING ---
-        # 1. Isolate genuine active keypress responses (drop timeouts/NaN values)
-        valid_responses = df[df['reaction_time_ms'].notna()].copy()
-        
-        # 2. Statistical Outlier Removal (Filter out mechanical keyboard blips < 200ms)
-        valid_responses = valid_responses[valid_responses['reaction_time_ms'] >= 200]
-        
-        # --- METRIC FEATURE ENGINEERING ---
-        # Calculate individual mean baseline reaction speed (Silence/None phases)
-        baseline_rt = valid_responses[valid_responses['alarm_file'] == 'none']['reaction_time_ms'].mean()
-        
-        # Calculate individual mean reaction speed when ANY chord alarm is playing
-        chord_rt = valid_responses[valid_responses['alarm_file'] != 'none']['reaction_time_ms'].mean()
-        
-        # Compute the specific metrics of interest
-        rt_penalty_ms = chord_rt - baseline_rt
-        overall_accuracy = df['correct'].mean()
-        
-        summary_records.append({
-            "Participant_ID": str(p_id).strip(),
-            "Baseline_Mean_RT_ms": baseline_rt,
-            "Chord_Mean_RT_ms": chord_rt,
-            "RT_Penalty_ms": rt_penalty_ms,
-            "Accuracy_Rate": overall_accuracy
-        })
-        
-    df_behavioral_summary = pd.DataFrame(summary_records)
 
-# -------------------------------------------------------------
-    # STEP 2: LOAD AND CLEAN SURVEY METADATA FROM GOOGLE FORM
-    # -------------------------------------------------------------
-    survey_path = "data/processed/google_form_responses.csv"
-    if not os.path.exists(survey_path):
-        print(f"❌ Missing survey metrics tracker file: '{survey_path}'")
-        return
-        
-    df_survey = pd.read_csv(survey_path)
-    df_survey.columns = df_survey.columns.str.strip()
-    
-    # 1. Map your EXACT column headers here
-    id_col = "Participant ID" 
-    group_col = "Have you had experience in musical performances?" # <--- EXACT QUESTION TEXT
-    
-    df_survey[id_col] = df_survey[id_col].astype(str).str.strip()
-    
-    # 2. DATA CLEANING: Clean long sentences into clean data science labels
-    group_mapping = {
-        "Yes, specifically in Jazz theory/performance.": "Jazz",
-        "Yes, in Classical or other non-jazz genres.": "Classical",
-        "No formal musical training (Non-musician).": "Non-Musician"
-    }
-    
-    # Create a new, clean categorical column for calculations
-    df_survey['Cohort'] = df_survey[group_col].str.strip().map(group_mapping)
-    
-    if id_col not in df_survey.columns:
-        print(f"❌ Error: Column '{id_col}' not detected in Google Form CSV headers.")
-        print(f"Available headers: {list(df_survey.columns)}")
-        return
+    for participant_id, dfs in grouped_dfs.items():
+        combined_df = pd.concat(dfs, ignore_index=True)
+        combined_df.insert(0, 'Participant_ID', participant_id)
 
-    df_survey[id_col] = df_survey[id_col].astype(str).str.strip()
-    
-    # -------------------------------------------------------------
-    # STEP 3: CONSOLIDATED PARSING LAYER JOIN (BEHAVIORAL + SURVEY)
-    # -------------------------------------------------------------
-    df_master = pd.merge(df_behavioral_summary, df_survey, left_on="Participant_ID", right_on=id_col, how="inner")
-    
-    if df_master.empty:
-        print("⚠️ Warning: Combined matrix join resulted in an empty frame.")
-        print("Verify your file name IDs match your Google Form ID entries precisely.")
-        return
+        if save_combined_raw:
+            ensure_directory(participant_raw_out)
+            combined_path = os.path.join(participant_raw_out, f'{participant_id}.csv')
+            combined_df.to_csv(combined_path, index=False)
 
-    # Export compiled dataset back into your tracking directory
-    master_output_path = "data/processed/master_analytics_dataset.csv"
-    df_master.to_csv(master_output_path, index=False)
-    print(f"✅ Integrated matrix written safely to disk: '{master_output_path}'")
+        summary_records.append(calculate_participant_metrics(participant_id, combined_df))
 
-    # -------------------------------------------------------------
-    # STEP 4: HYPOTHESIS TESTING (ONE-WAY ANOVA FOR 3 GROUPS)
-    # -------------------------------------------------------------
-    print("\n==========================================")
-    print("       STATISTICAL HYPOTHESIS TESTING       ")
-    print("==========================================")
-    
-    # Isolate data arrays for our 3 cleaned groups
-    jazz_group = df_master[df_master['Cohort'] == 'Jazz']['RT_Penalty_ms'].dropna()
-    classical_group = df_master[df_master['Cohort'] == 'Classical']['RT_Penalty_ms'].dropna()
-    non_music_group = df_master[df_master['Cohort'] == 'Non-Musician']['RT_Penalty_ms'].dropna()
-    
-    print(f"Jazz Group:       Sample Size = {len(jazz_group)}, Mean RT Penalty = {jazz_group.mean():.2f} ms")
-    print(f"Classical Group:  Sample Size = {len(classical_group)}, Mean RT Penalty = {classical_group.mean():.2f} ms")
-    print(f"Non-Musician:     Sample Size = {len(non_music_group)}, Mean RT Penalty = {non_music_group.mean():.2f} ms")
-    
-    if len(jazz_group) < 2 or len(classical_group) < 2 or len(non_music_group) < 2:
-        print("\nℹ️ Waiting for more data. Need at least 2 entries per group to execute ANOVA.")
-        return
+    return pd.DataFrame(summary_records)
 
-    # Run One-Way ANOVA across all three distributions
-    f_stat, p_value = stats.f_oneway(jazz_group, classical_group, non_music_group)
-    
-    print(f"\nCalculated F-Statistic: {f_stat:.4f}")
-    print(f"Calculated ANOVA P-value: {p_value:.6f}")
-    
-    print("\n------------------------------------------")
-    if p_value < 0.05:
-        print("🎉 STATISTICALLY SIGNIFICANT RESULT!")
-        print("The dissonance performance penalty is significantly different across the 3 cohorts.")
-        print("You can now run a Post-Hoc Tukey HSD test to see if Jazz holds flat compared to Classical!")
+
+def find_survey_columns(df: pd.DataFrame) -> Tuple[str, str]:
+    cleaned = [col.strip() for col in df.columns]
+    participant_candidates = [col for col in cleaned if 'participant' in col.lower()]
+    rating_candidates = [col for col in cleaned if any(token in col.lower() for token in ['uncomfort', 'discomfort', 'chord', 'rating'])]
+
+    if not participant_candidates:
+        raise ValueError('Could not detect a participant ID column in the survey CSV.')
+    if not rating_candidates:
+        raise ValueError('Could not detect a chord discomfort/rating column in the survey CSV.')
+
+    return participant_candidates[0], rating_candidates[0]
+
+
+def merge_summary_with_survey(
+    df_summary: pd.DataFrame,
+    survey_path: str,
+    participant_col: Optional[str] = None,
+    rating_col: Optional[str] = None,
+) -> Tuple[pd.DataFrame, str, str]:
+    survey = pd.read_csv(survey_path)
+    survey.columns = survey.columns.str.strip()
+
+    if participant_col is None or rating_col is None:
+        participant_col, rating_col = find_survey_columns(survey)
+
+    survey['Participant_ID'] = survey[participant_col].astype(str).apply(extract_base_participant_id)
+    merged = df_summary.merge(
+        survey[['Participant_ID', rating_col]],
+        on='Participant_ID',
+        how='inner',
+    )
+
+    if merged.empty:
+        raise ValueError('No overlapping Participant_ID values were found between behavior summary and survey CSV.')
+
+    return merged, participant_col, rating_col
+
+
+def run_statistical_tests(df_merged: pd.DataFrame, rating_col: str) -> pd.DataFrame:
+    df = df_merged.copy()
+    df[rating_col] = pd.to_numeric(df[rating_col], errors='coerce')
+    df = df.dropna(subset=[rating_col, 'RT_Penalty_ms'])
+
+    if df.empty:
+        raise ValueError('No valid numeric survey ratings and RT penalty values were available for testing.')
+
+    pearson = stats.pearsonr(df[rating_col], df['RT_Penalty_ms'])
+    spearman = stats.spearmanr(df[rating_col], df['RT_Penalty_ms'])
+
+    median_rating = df[rating_col].median()
+    low_group = df.loc[df[rating_col] <= median_rating, 'RT_Penalty_ms']
+    high_group = df.loc[df[rating_col] > median_rating, 'RT_Penalty_ms']
+    ttest = stats.ttest_ind(low_group, high_group, equal_var=False, nan_policy='omit')
+
+    report = pd.DataFrame(
+        [
+            {
+                'Test': 'Pearson correlation',
+                'Rating_Column': rating_col,
+                'Metric': 'RT_Penalty_ms',
+                'Statistic': pearson.statistic,
+                'p_value': pearson.pvalue,
+                'Notes': 'Linear relation',
+            },
+            {
+                'Test': 'Spearman correlation',
+                'Rating_Column': rating_col,
+                'Metric': 'RT_Penalty_ms',
+                'Statistic': spearman.correlation,
+                'p_value': spearman.pvalue,
+                'Notes': 'Rank-order relation',
+            },
+            {
+                'Test': 'Welch t-test',
+                'Rating_Column': rating_col,
+                'Metric': 'RT_Penalty_ms',
+                'Statistic': ttest.statistic,
+                'p_value': ttest.pvalue,
+                'Notes': f'Low vs high discomfort split at median ({median_rating})',
+            },
+        ]
+    )
+
+    return report
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description='Process N-back raw behavioral CSVs and optionally merge Google Form ratings.')
+    parser.add_argument('--raw-dir', default='data/raw_behavioral', help='Folder containing the raw behavioral CSV files.')
+    parser.add_argument('--processed-dir', default='data/processed', help='Folder to write combined and summary outputs.')
+    parser.add_argument('--survey-path', default=None, help='Path to the Google Form survey CSV file.')
+    parser.add_argument('--save-combined-raw', action='store_true', help='Save combined participant raw files under processed output.')
+    args = parser.parse_args()
+
+    ensure_directory(args.processed_dir)
+    participant_raw_out = os.path.join(args.processed_dir, 'combined_raw_behavioral')
+    if args.save_combined_raw:
+        ensure_directory(participant_raw_out)
+
+    print('Loading raw behavioral files...')
+    df_summary = combine_raw_sessions(args.raw_dir, participant_raw_out, args.save_combined_raw)
+
+    summary_path = os.path.join(args.processed_dir, 'behavioral_summary.csv')
+    df_summary.to_csv(summary_path, index=False)
+    print(f'Saved participant summary to {summary_path}')
+
+    if args.survey_path:
+        print('Loading survey CSV...')
+        merged, participant_col, rating_col = merge_summary_with_survey(df_summary, args.survey_path)
+        merged_path = os.path.join(args.processed_dir, 'behavioral_survey_merged.csv')
+        merged.to_csv(merged_path, index=False)
+        print(f'Saved merged behavioral + survey data to {merged_path}')
+
+        report = run_statistical_tests(merged, rating_col)
+        report_path = os.path.join(args.processed_dir, 'survey_statistics_report.csv')
+        report.to_csv(report_path, index=False)
+        print(f'Saved statistical report to {report_path}')
+        print(report.to_string(index=False))
     else:
-        print("⚖️ RETAIN NULL HYPOTHESIS")
-        print("No statistically significant group performance delta detected across cohorts.")
-    print("==========================================")
+        print('No survey CSV path provided. Skipping survey merge and statistical tests.')
 
-if __name__ == "__main__":
-    process_and_analyze()
+
+if __name__ == '__main__':
+    main()

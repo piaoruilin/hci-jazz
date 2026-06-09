@@ -26,8 +26,8 @@ class AuditoryNBack:
         self.N_BACK = 2
         
         self.LETTER_SEQUENCE = [
-            "D", "G", "C", "D", "C", "D", "G", "D", "F", "F", 
-            "B", "F", "G", "C", "B", "C", "C", "G", "C", "B", "B", "B"
+            "B", "G", "B", "G", "D", "D", "C", "B", "F", "C", 
+            "G", "F", "G", "B", "B", "B", "B", "C", "F", "D", "C", "D"
         ]
         
         # FIXED: Speed up pacing to 2.5 seconds per letter turn
