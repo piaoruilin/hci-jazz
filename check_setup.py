@@ -3,7 +3,7 @@ import sys
 import importlib.metadata
 
 def check_and_install():
-    required = {'pygame', 'pandas', 'scipy', 'statsmodels', 'matplotlib', 'seaborn'}
+    required = {'pygame', 'pandas', 'scipy', 'statsmodels', 'matplotlib', 'seaborn', 'pingouin', 'fluidsynth'}
     
     # Get set of installed packages
     installed = {pkg.metadata['Name'].lower() for pkg in importlib.metadata.distributions()}
